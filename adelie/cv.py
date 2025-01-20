@@ -43,6 +43,10 @@ class CVGrpnetResult:
     """
     Argmin of ``avg_losses``.
     """
+    betas: np.ndarray = None
+    """
+    The coefficients of each feature
+    """
     
     def plot_loss(self):
         """Plots the average K-fold CV loss.
@@ -234,6 +238,7 @@ def cv_grpnet(
         progress_bar=False,
     )
     full_lmdas = state.lmda_max * np.logspace(0, np.log10(min_ratio), lmda_path_size)
+    all_betas = []
 
     cv_losses = np.empty((n_folds, full_lmdas.shape[0]))
     for fold in range(n_folds):
@@ -312,6 +317,10 @@ def cv_grpnet(
             if weights_sum_val > 0 else
             0
         )
+
+        betas = state.betas[-1].toarray()[0]
+        betas_per_group = betas.reshape((-1, X.shape[1]))
+        all_betas.append(list(betas_per_group))
     logger.logger.setLevel(logger_level)
 
     avg_losses = np.mean(cv_losses, axis=0)
@@ -322,4 +331,5 @@ def cv_grpnet(
         losses=cv_losses,
         avg_losses=avg_losses,
         best_idx=best_idx,
+        betas=np.array(all_betas)
     )
