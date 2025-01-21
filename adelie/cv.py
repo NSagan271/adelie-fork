@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.sparse
+from scipy.special import softmax
+from sklearn.metrics import roc_auc_score
 
 
 @dataclass
@@ -47,6 +49,8 @@ class CVGrpnetResult:
     """
     The coefficients of each feature
     """
+    roc_auc: np.ndarray = None
+    test_error: np.ndarray = None
     
     def plot_loss(self):
         """Plots the average K-fold CV loss.
@@ -239,6 +243,8 @@ def cv_grpnet(
     )
     full_lmdas = state.lmda_max * np.logspace(0, np.log10(min_ratio), lmda_path_size)
     all_betas = []
+    roc_aucs = np.zeros((n_folds, len(full_lmdas)))
+    test_errors = np.zeros((n_folds, len(full_lmdas)))
 
     cv_losses = np.empty((n_folds, full_lmdas.shape[0]))
     for fold in range(n_folds):
@@ -307,6 +313,12 @@ def cv_grpnet(
             n_threads=n_threads,
         )
 
+        val_probs = softmax(etas[:, order[begin:begin+curr_fold_size], :], axis=-1).squeeze()
+        for i in range(len(full_lmdas)):
+            roc_aucs[fold, i] = roc_auc_score(glm.y[order[begin:begin+curr_fold_size], :], val_probs[i, :, :])
+            preds = np.argmax(val_probs[i, :, :], axis=1)
+            test_errors[fold, i] = np.sum(preds != np.argmax(glm.y[order[begin:begin+curr_fold_size], :])) / len(preds)
+
         # compute loss on full data
         full_data_losses = np.array([glm.loss(eta) for eta in etas])
         # compute loss on training data
@@ -318,8 +330,7 @@ def cv_grpnet(
             0
         )
 
-        betas = state.betas[-1].toarray()[0]
-        betas_per_group = betas.reshape((-1, X.shape[1]))
+        betas_per_group = full_betas.toarray().reshape((len(full_lmdas), -1, X.shape[1]))
         all_betas.append(list(betas_per_group))
     logger.logger.setLevel(logger_level)
 
@@ -331,5 +342,7 @@ def cv_grpnet(
         losses=cv_losses,
         avg_losses=avg_losses,
         best_idx=best_idx,
-        betas=np.array(all_betas)
+        betas=np.array(all_betas),
+        roc_auc=np.mean(roc_aucs, axis=0),
+        test_error=np.mean(test_errors, axis=0)
     )
