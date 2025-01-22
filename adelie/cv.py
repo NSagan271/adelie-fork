@@ -2,6 +2,8 @@ from typing import Union
 from .diagnostic import (
     coefficient,
     predict,
+    auc_roc,
+    test_error
 )
 from .glm import (
     GlmBase32,
@@ -20,8 +22,6 @@ from dataclasses import dataclass
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.sparse
-from scipy.special import softmax, expit
-from sklearn.metrics import roc_auc_score
 
 
 @dataclass
@@ -314,36 +314,17 @@ def cv_grpnet(
             n_threads=n_threads,
         )
 
-
         if len(glm.y.shape) > 1:
-            val_probs = softmax(etas[:, order[begin:begin+curr_fold_size], :], axis=-1).squeeze()
-            y_true = np.argmax(glm.y[order[begin:begin+curr_fold_size], :], axis=1)
-            if len(np.unique(y_true)) > 1:
-                roc_auc_folds.append(fold)
-
-            for i in range(len(full_lmdas)):
-                if fold in roc_auc_folds:
-                    y_auc = val_probs[i, :, :]
-                    roc_aucs[fold, i] = roc_auc_score(y_true, y_auc, multi_class='ovr')
-
-                preds = np.argmax(val_probs[i, :, :], axis=1)
-                test_errors[fold, i] = np.sum(preds != y_true) / len(preds)
+            y_fold = glm.y[order[begin:begin+curr_fold_size], :]
+            etas_fold = etas[:, order[begin:begin+curr_fold_size], :]
         else:
-            proba = expit(etas)
-            val_probs = np.stack((1 - proba, proba), axis=-1).squeeze()
-            val_probs = val_probs[:, order[begin:begin+curr_fold_size], :]
+            y_fold = glm.y[order[begin:begin+curr_fold_size]]
+            etas_fold = etas[:, order[begin:begin+curr_fold_size]]
 
-            y_true = glm.y[order[begin:begin+curr_fold_size]]
-            if len(np.unique(y_true)) > 1:
-                roc_auc_folds.append(fold)
-
-            for i in range(len(full_lmdas)):
-                if fold in roc_auc_folds:
-                    y_auc = val_probs[i, :, 1]
-                    roc_aucs[fold, i] = roc_auc_score(y_true, y_auc)
-
-                preds = np.argmax(val_probs[i, :, :], axis=1)
-                test_errors[fold, i] = np.sum(preds != y_true) / len(preds)
+        roc_aucs[fold, :] = auc_roc(etas_fold, y_fold, len(glm.y.shape) > 1)
+        if not np.any(np.isnan(roc_aucs[fold, :])):
+            roc_auc_folds.append(fold)
+        test_errors[fold, :] = test_error(etas_fold, y_fold, len(glm.y.shape) > 1)
 
         # compute loss on full data
         full_data_losses = np.array([glm.loss(eta) for eta in etas])

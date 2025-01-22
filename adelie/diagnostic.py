@@ -26,6 +26,61 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
+from scipy.special import softmax, expit
+from sklearn.metrics import roc_auc_score
+
+
+def auc_roc(
+    etas: np.ndarray,
+    y: np.ndarray,
+    multinomial: bool
+):
+    if multinomial and y.shape[1] == 2:
+        multinomial = False
+        y = np.argmax(y, axis=1)
+
+    n_lambdas = etas.shape[0]
+    if multinomial:
+        val_probs = softmax(etas, axis=-1).squeeze()
+        y_true = np.argmax(y, axis=1)
+
+        return np.array([
+            roc_auc_score(y_true, val_probs[i, :, :], multi_class='ovr')
+                for i in range(n_lambdas)
+        ])
+    else:
+        proba = expit(etas)
+        val_probs = np.stack((1 - proba, proba), axis=-1).squeeze()
+
+        return np.array([
+            roc_auc_score(y, val_probs[i, :, 1])
+                for i in range(n_lambdas)
+        ])
+
+def test_error(
+    etas: np.ndarray,
+    y: np.ndarray,
+    multinomial: bool
+):
+    n_lambdas = etas.shape[0]
+
+    if multinomial:
+        val_probs = softmax(etas, axis=-1).squeeze()
+        y_true = np.argmax(y, axis=1)
+
+        return np.array([
+            np.sum(np.argmax(val_probs[i, :, :], axis=1) != y_true) / len(y_true)
+                for i in range(n_lambdas)
+        ])
+    else:
+        proba = expit(etas)
+        val_probs = np.stack((1 - proba, proba), axis=-1).squeeze()
+
+        return np.array([
+            np.sum(np.argmax(val_probs[i, :, :], axis=1) != y) / len(y)
+                for i in range(n_lambdas)
+        ])
+
 
 def predict(
     X: Union[np.ndarray, MatrixNaiveBase32, MatrixNaiveBase64],
