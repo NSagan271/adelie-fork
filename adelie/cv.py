@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.sparse
-from scipy.special import softmax
+from scipy.special import softmax, expit
 from sklearn.metrics import roc_auc_score
 
 
@@ -247,6 +247,7 @@ def cv_grpnet(
     test_errors = np.zeros((n_folds, len(full_lmdas)))
 
     cv_losses = np.empty((n_folds, full_lmdas.shape[0]))
+    roc_auc_folds = []
     for fold in range(n_folds):
         # current validation fold range
         begin = (
@@ -313,11 +314,36 @@ def cv_grpnet(
             n_threads=n_threads,
         )
 
-        val_probs = softmax(etas[:, order[begin:begin+curr_fold_size], :], axis=-1).squeeze()
-        for i in range(len(full_lmdas)):
-            roc_aucs[fold, i] = roc_auc_score(glm.y[order[begin:begin+curr_fold_size], :], val_probs[i, :, :])
-            preds = np.argmax(val_probs[i, :, :], axis=1)
-            test_errors[fold, i] = np.sum(preds != np.argmax(glm.y[order[begin:begin+curr_fold_size], :])) / len(preds)
+
+        if len(glm.y.shape) > 1:
+            val_probs = softmax(etas[:, order[begin:begin+curr_fold_size], :], axis=-1).squeeze()
+            y_true = np.argmax(glm.y[order[begin:begin+curr_fold_size], :], axis=1)
+            if len(np.unique(y_true)) > 1:
+                roc_auc_folds.append(fold)
+
+            for i in range(len(full_lmdas)):
+                if fold in roc_auc_folds:
+                    y_auc = val_probs[i, :, :]
+                    roc_aucs[fold, i] = roc_auc_score(y_true, y_auc, multi_class='ovr')
+
+                preds = np.argmax(val_probs[i, :, :], axis=1)
+                test_errors[fold, i] = np.sum(preds != y_true) / len(preds)
+        else:
+            proba = expit(etas)
+            val_probs = np.stack((1 - proba, proba), axis=-1).squeeze()
+            val_probs = val_probs[:, order[begin:begin+curr_fold_size], :]
+
+            y_true = glm.y[order[begin:begin+curr_fold_size]]
+            if len(np.unique(y_true)) > 1:
+                roc_auc_folds.append(fold)
+
+            for i in range(len(full_lmdas)):
+                if fold in roc_auc_folds:
+                    y_auc = val_probs[i, :, 1]
+                    roc_aucs[fold, i] = roc_auc_score(y_true, y_auc)
+
+                preds = np.argmax(val_probs[i, :, :], axis=1)
+                test_errors[fold, i] = np.sum(preds != y_true) / len(preds)
 
         # compute loss on full data
         full_data_losses = np.array([glm.loss(eta) for eta in etas])
@@ -343,6 +369,6 @@ def cv_grpnet(
         avg_losses=avg_losses,
         best_idx=best_idx,
         betas=np.array(all_betas),
-        roc_auc=np.mean(roc_aucs, axis=0),
+        roc_auc=np.mean(roc_aucs[roc_auc_folds, :], axis=0),
         test_error=np.mean(test_errors, axis=0)
     )
