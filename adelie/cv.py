@@ -3,7 +3,8 @@ from .diagnostic import (
     coefficient,
     predict,
     auc_roc,
-    test_error
+    test_error_hamming,
+    test_error_mse
 )
 from .glm import (
     GlmBase32,
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.sparse
+from . import adelie_core as core
 
 
 @dataclass
@@ -141,7 +143,7 @@ def cv_grpnet(
     *,
     n_threads: int =1,
     early_exit: bool =False,
-    min_ratio: float =1e-1,
+    min_ratio: float = 1e-1,
     lmda_path_size: int =100,
     n_folds: int =5,
     seed: int =None,
@@ -243,8 +245,28 @@ def cv_grpnet(
     )
     full_lmdas = state.lmda_max * np.logspace(0, np.log10(min_ratio), lmda_path_size)
     all_betas = []
-    roc_aucs = np.zeros((n_folds, len(full_lmdas)))
-    test_errors = np.zeros((n_folds, len(full_lmdas)))
+
+    classification = glm.core_base in (
+        core.glm.GlmBinomialLogit64,
+        core.glm.GlmBinomialLogit32,
+        core.glm.GlmBinomialProbit64,
+        core.glm.GlmBinomialProbit32,
+        core.glm.GlmMultinomial64,
+        core.glm.GlmMultinomial32
+    )
+
+    multinomial = glm.core_base in (
+        core.glm.GlmMultinomial64,
+        core.glm.GlmMultinomial32
+    )
+
+
+    if classification:
+        roc_aucs = np.empty((n_folds, len(full_lmdas)))
+    else:
+        roc_aucs = None
+    
+    test_errors = np.empty((n_folds, len(full_lmdas)))
 
     cv_losses = np.empty((n_folds, full_lmdas.shape[0]))
     roc_auc_folds = []
@@ -314,17 +336,27 @@ def cv_grpnet(
             n_threads=n_threads,
         )
 
-        if len(glm.y.shape) > 1:
-            y_fold = glm.y[order[begin:begin+curr_fold_size], :]
-            etas_fold = etas[:, order[begin:begin+curr_fold_size], :]
-        else:
+        # compute error metrics
+        if classification:
+            if multinomial:
+                y_fold = glm.y[order[begin:begin+curr_fold_size], :]
+                etas_fold = etas[:, order[begin:begin+curr_fold_size], :]
+            else:
+                y_fold = glm.y[order[begin:begin+curr_fold_size]]
+                etas_fold = etas[:, order[begin:begin+curr_fold_size]]
+            
+            # AUROC
+            auc_score = auc_roc(etas_fold, y_fold, multinomial)
+            if auc_score is not None:
+                roc_auc_folds.append(fold)
+                roc_aucs[fold, :] = auc_score
+
+            # Test error: Hamming
+            test_errors[fold, :] = test_error_hamming(etas_fold, y_fold, multinomial)
+        else: # regression
             y_fold = glm.y[order[begin:begin+curr_fold_size]]
             etas_fold = etas[:, order[begin:begin+curr_fold_size]]
-
-        roc_aucs[fold, :] = auc_roc(etas_fold, y_fold, len(glm.y.shape) > 1)
-        if not np.any(np.isnan(roc_aucs[fold, :])):
-            roc_auc_folds.append(fold)
-        test_errors[fold, :] = test_error(etas_fold, y_fold, len(glm.y.shape) > 1)
+            test_errors[fold, :] = test_error_mse(etas_fold, y_fold)
 
         # compute loss on full data
         full_data_losses = np.array([glm.loss(eta) for eta in etas])
@@ -344,12 +376,21 @@ def cv_grpnet(
     avg_losses = np.mean(cv_losses, axis=0)
     best_idx = np.argmin(avg_losses)
 
+    if classification:
+        if len(roc_auc_folds) == 0:
+            roc_auc = np.zeros_like(test_errors)
+        else:
+            roc_auc = np.mean(roc_aucs[roc_auc_folds, :], axis=0)
+    else:
+        roc_auc = None
+
+
     return CVGrpnetResult(
         lmdas=full_lmdas,
         losses=cv_losses,
         avg_losses=avg_losses,
         best_idx=best_idx,
         betas=np.array(all_betas),
-        roc_auc=np.mean(roc_aucs[roc_auc_folds, :], axis=0),
+        roc_auc=roc_auc,
         test_error=np.mean(test_errors, axis=0)
     )

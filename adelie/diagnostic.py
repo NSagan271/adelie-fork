@@ -43,7 +43,8 @@ def auc_roc(
     if multinomial:
         val_probs = softmax(etas, axis=-1).squeeze()
         y_true = np.argmax(y, axis=1)
-
+        if len(np.unique(y_true)) != y.shape[1]:
+            return None
         return np.array([
             roc_auc_score(y_true, val_probs[i, :, :], multi_class='ovr')
                 for i in range(n_lambdas)
@@ -52,12 +53,15 @@ def auc_roc(
         proba = expit(etas)
         val_probs = np.stack((1 - proba, proba), axis=-1).squeeze()
 
+        if len(np.unique(y)) != 2:
+            return None
+
         return np.array([
             roc_auc_score(y, val_probs[i, :, 1])
                 for i in range(n_lambdas)
         ])
 
-def test_error(
+def test_error_hamming(
     etas: np.ndarray,
     y: np.ndarray,
     multinomial: bool
@@ -80,6 +84,18 @@ def test_error(
             np.sum(np.argmax(val_probs[i, :, :], axis=1) != y) / len(y)
                 for i in range(n_lambdas)
         ])
+    
+def test_error_mse(
+    etas: np.ndarray,
+    y: np.ndarray,
+):
+    n_lambdas = etas.shape[0]
+
+    return np.array([
+        np.sum((etas[i, :] - y)**2) / len(y)
+            for i in range(n_lambdas)
+    ])
+        
 
 
 def predict(
