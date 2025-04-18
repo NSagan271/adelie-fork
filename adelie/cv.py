@@ -24,7 +24,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.sparse
 from . import adelie_core as core
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, KFold
 
 
 @dataclass
@@ -148,6 +148,7 @@ def cv_grpnet(
     lmda_path_size: int =100,
     n_folds: int =5,
     seed: int =None,
+    stratified_split: bool = False,
     **grpnet_params,
 ):
     """Solves cross-validated group elastic net via naive method.
@@ -230,9 +231,14 @@ def cv_grpnet(
     if not (seed is None):
         np.random.seed(seed)
     # order = np.random.choice(n, n, replace=False)
-    fold_gen = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed).split(
-        X_raw, glm.y
-    )
+    if stratified_split:
+        fold_gen = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed).split(
+            X_raw, glm.y
+        )
+    else:
+        fold_gen = KFold(n_splits=n_folds, shuffle=True, random_state=seed).split(
+            X_raw, glm.y
+        )
 
     # fold_size = n // n_folds
     # remaining = n % n_folds
