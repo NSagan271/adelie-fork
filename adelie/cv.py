@@ -24,6 +24,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.sparse
 from . import adelie_core as core
+from sklearn.model_selection import StratifiedKFold
 
 
 @dataclass
@@ -228,10 +229,13 @@ def cv_grpnet(
 
     if not (seed is None):
         np.random.seed(seed)
-    order = np.random.choice(n, n, replace=False)
+    # order = np.random.choice(n, n, replace=False)
+    fold_gen = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed).split(
+        X_raw, glm.y
+    )
 
-    fold_size = n // n_folds
-    remaining = n % n_folds
+    # fold_size = n // n_folds
+    # remaining = n % n_folds
 
     # full data lambda sequence
     logger_level = logger.logger.level
@@ -272,15 +276,16 @@ def cv_grpnet(
     roc_auc_folds = []
     for fold in range(n_folds):
         # current validation fold range
-        begin = (
-            (fold_size + 1) * min(fold, remaining) + 
-            max(fold - remaining, 0) * fold_size
-        )
-        curr_fold_size = fold_size + (fold < remaining)
+        # begin = (
+        #     (fold_size + 1) * min(fold, remaining) + 
+        #     max(fold - remaining, 0) * fold_size
+        # )
+        # curr_fold_size = fold_size + (fold < remaining)
+        _, test_idxs = next(fold_gen)
 
         # mask out validation fold
         weights = glm.weights.copy()
-        weights[order[begin:begin+curr_fold_size]] = 0
+        weights[test_idxs] = 0
         weights_sum = np.sum(weights)
         weights /= weights_sum
         glm_c = glm.reweight(weights)
@@ -309,7 +314,7 @@ def cv_grpnet(
         )
 
         # compute validation weight sum
-        weights_sum_val = np.sum(glm.weights[order[begin:begin+curr_fold_size]])
+        weights_sum_val = np.sum(glm.weights[test_idxs])
 
         # get coefficients/intercepts only on full_lmdas
         betas = state.betas
@@ -339,11 +344,11 @@ def cv_grpnet(
         # compute error metrics
         if classification:
             if multinomial:
-                y_fold = glm.y[order[begin:begin+curr_fold_size], :]
-                etas_fold = etas[:, order[begin:begin+curr_fold_size], :]
+                y_fold = glm.y[test_idxs, :]
+                etas_fold = etas[:, test_idxs, :]
             else:
-                y_fold = glm.y[order[begin:begin+curr_fold_size]]
-                etas_fold = etas[:, order[begin:begin+curr_fold_size]]
+                y_fold = glm.y[test_idxs]
+                etas_fold = etas[:, test_idxs]
             
             # AUROC
             auc_score = auc_roc(etas_fold, y_fold, multinomial)
@@ -354,8 +359,8 @@ def cv_grpnet(
             # Test error: Hamming
             test_errors[fold, :] = test_error_hamming(etas_fold, y_fold, multinomial)
         else: # regression
-            y_fold = glm.y[order[begin:begin+curr_fold_size]]
-            etas_fold = etas[:, order[begin:begin+curr_fold_size]]
+            y_fold = glm.y[test_idxs]
+            etas_fold = etas[:, test_idxs]
             test_errors[fold, :] = test_error_mse(etas_fold, y_fold)
 
         # compute loss on full data
